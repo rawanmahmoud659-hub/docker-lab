@@ -10,57 +10,73 @@ pipeline {
     stages {
         stage('Getting Repo files') {
             steps {
-                git branch: 'main',
-                    credentialsId: '4607176d-d42f-4dc9-8107-466a24a71408',
-                    url: "${REPO_URL}"
+                checkout scm
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t "$APP_NAME:$docker-tken" .'
+                script {
+                    def buildTag = currentBuild.number.toString()
+
+                    echo "Jenkins build number: ${buildTag}"
+
+                    sh """
+                        docker build -t ${APP_NAME}:${buildTag} .
+                    """
+                }
             }
         }
 
         stage('Push Docker Image') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'docker',
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_PASSWORD'
-                    )
-                ]) {
-                    sh '''
-                        set +x
-                        echo "$DOCKER_PASSWORD" |
-                            docker login -u "$DOCKER_USERNAME" --password-stdin
+                script {
+                    def buildTag = currentBuild.number.toString()
 
-                        docker tag "$APP_NAME:$BUILD_NUMBER" \
-                            "$DOCKER_USERNAME/$APP_NAME:$BUILD_NUMBER"
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'docker',
+                            usernameVariable: 'DOCKER_USERNAME',
+                            passwordVariable: 'DOCKER_PASSWORD'
+                        )
+                    ]) {
+                        sh '''
+                            set +x
 
-                        docker push "$DOCKER_USERNAME/$APP_NAME:$BUILD_NUMBER"
-                    '''
+                            echo "$DOCKER_PASSWORD" |
+                                docker login -u "$DOCKER_USERNAME" --password-stdin
+
+                            docker tag "$APP_NAME:$BUILD_NUMBER" \
+                                "$DOCKER_USERNAME/$APP_NAME:$BUILD_NUMBER"
+
+                            docker push "$DOCKER_USERNAME/$APP_NAME:$BUILD_NUMBER"
+
+                            docker logout
+                        '''
+                    }
                 }
             }
         }
 
         stage('Run Docker Container') {
             steps {
-                sh '''
-                    CONTAINER_NAME="${APP_NAME}-main-${BUILD_NUMBER}"
+                script {
+                    def buildTag = currentBuild.number.toString()
+                    def containerName = "${APP_NAME}-main-${buildTag}"
 
-                    if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-                        docker rm -f "$CONTAINER_NAME"
-                    fi
+                    sh """
+                        if docker container inspect ${containerName} >/dev/null 2>&1; then
+                            docker rm -f ${containerName}
+                        fi
 
-                    docker run -d \
-                        --name "$CONTAINER_NAME" \
-                        -p 5000:5000 \
-                        "$APP_NAME:$BUILD_NUMBER"
+                        docker run -d \
+                            --name ${containerName} \
+                            -p 5000:5000 \
+                            ${APP_NAME}:${buildTag}
 
-                    docker ps
-                '''
+                        docker ps
+                    """
+                }
             }
         }
     }
@@ -69,6 +85,7 @@ pipeline {
         success {
             echo 'Docker CI/CD pipeline completed successfully!'
         }
+
         failure {
             echo 'Pipeline failed. Check Console Output.'
         }
